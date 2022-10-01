@@ -115,7 +115,11 @@ ui <- fluidPage(
                       p("You cannot undo your first answer."),
                       h2("What even is a capital city or country?"),
                       p("It's complicated. I just found a map file online and am not smart enough to change it. There's no penalties for incorrect guesses, so just have a go and read about the various geopolitical disputes afterwards.
-                         You may even discover some fun facts along the way...")
+                         You may even discover some fun facts along the way..."),
+                      h2("Game end"),
+                      p("The game ends once you reach the northern-most capital. Alternatively, you can return to this page and click the button below."),
+                      p("Once the game is completed, you can choose to add your game to the leaderboard, and view previous leaderboard games. "),
+                      div(actionButton("giveup", "Give Up"))
                       ),
                       column(7,
                              tags$img(src = "example_game.png", width = "90%"))
@@ -132,7 +136,7 @@ ui <- fluidPage(
                                     hr(),
                                     h4(textOutput("result_text"))
                              ),
-                             column(4, 
+                             column(3, 
                                     h1(htmlOutput("score_text")),
                                     h5(textOutput("countriesmissed_text"),
                                        hr(),
@@ -140,7 +144,7 @@ ui <- fluidPage(
                                        h4(textOutput("countries_missed_text"))
                                     )
                              ),
-                             column(4,
+                             column(3,
                                     div(htmlOutput("fun_fact_textbox"), id = "funfact_header_css"),
                                     div(htmlOutput("game_end_prompt"))
                              )
@@ -398,6 +402,78 @@ server = function(input, output, session) {
   output$guess_text <- renderText(paste("Current latitude is ", rv$current_lat))
   output$countriesmissed_text <- renderText(paste("Previous guess missed: ", rv$countries_missed, " countries."))
   
+  observeEvent(input$giveup, {
+    rv$result_text <- paste("Game over :)")
+    prev_rem <- rv$countries_rem
+    rv$current_lat <- 90
+
+    rv$countries_out[capitals_df$Latitude <= rv$current_lat] <- 1
+    rv$countries_out[capitals_df$Capital %in% rv$correct_countries] <- 2
+    rv$country_names_out[capitals_df$Latitude <= rv$current_lat] <- capitals_df$COUNTRY[capitals_df$Latitude <= rv$current_lat]
+    rv$latitudes_out[capitals_df$Latitude <= rv$current_lat] <- capitals_df$Latitude[capitals_df$Latitude <= rv$current_lat]
+    rv$longitudes_out[capitals_df$Latitude <= rv$current_lat] <- capitals_df$Longitude[capitals_df$Latitude <= rv$current_lat]
+    rv$capital_names_out[capitals_df$Latitude <= rv$current_lat] <- capitals_df$Capital[capitals_df$Latitude <= rv$current_lat]
+    rv$countries_rem <- 195 - sum(rv$countries_out > 0)
+    rv$countries_missed <- prev_rem - rv$countries_rem - 1
+    rv$miss_list <- c(rv$miss_list, rv$countries_missed)
+    rv$countriesout_new <- capitals_df[capitals_df$Latitude <= rv$current_lat & capitals_df$Latitude > rv$prev_lat,]$COUNTRY
+    
+    rv$game_summary <- data.frame("Guess No." = seq(1, length(rv$all_guesses)),
+                                  "Guess" = rv$all_guesses,
+                                  "Countries Missed" = rv$miss_list)
+    
+    my_spdf$countries <- rv$country_names_out
+    my_spdf$latitudes<- rv$latitudes_out
+    my_spdf$capitals <- rv$capital_names_out
+    my_spdf$countries_out <- rv$countries_out
+    #my_spdf$countries_out_new <- rv$countries_out_new
+    
+    rv$countriesout_df <- data.frame("Country" = rv$country_names_out[rv$country_names_out != "???"],
+                                     "Capital" = rv$capital_names_out[rv$country_names_out != "???"],
+                                     "Latitude" = as.numeric(rv$latitudes_out[rv$country_names_out != "???"]),
+                                     "Longitude" = as.numeric(rv$longitudes_out[rv$country_names_out != "???"]))
+    rv$newlyout_df <- rv$countriesout_df[rv$countriesout_df$Country %in% rv$countriesout_new,]
+    rv$countriesout_df <- rv$countriesout_df[order(rv$countriesout_df$Latitude, decreasing = TRUE),]
+    
+    labels <- lapply(seq(nrow(my_spdf)), function(i) {
+      paste0( "<b>", my_spdf$countries[i], '</br>', 
+              "Capital: </b>", my_spdf$capitals[i], '</br>', 
+              "<b>Latitude: </b>", my_spdf$latitudes[i]) 
+    })
+    
+    leafletProxy("map") %>%
+      #removeShape(rv$countriesout_new) %>%
+      #clearMarkers() %>% %>%
+      
+      addPolygons(data = my_spdf,
+                  weight = 1,
+                  dashArray = "",
+                  color = "black",
+                  fillOpacity = 0.4,
+                  layerId = my_spdf$COUNTRY,
+                  fillColor = ~pal(countries_out),
+                  highlight = highlightOptions(
+                    weight = 3,
+                    color = "#123",
+                    dashArray = "",
+                    fillOpacity = 0.8,
+                    bringToFront = FALSE),
+                  label = lapply(labels, htmltools::HTML),
+                  options = pathOptions(pane = "polygons")
+      ) %>%
+      addCircleMarkers(rv$newlyout_df$Longitude, rv$newlyout_df$Latitude, label = rv$newlyout_df$Capital,
+                       radius = 4, stroke = FALSE, fillOpacity = 0.9, color = "#363636",
+                       options = pathOptions(pane = "circles"))
+    
+    output$countriesout_table <- renderDataTable({
+      datatable(rv$countriesout_df[c("Country", "Capital", "Latitude")], options = list(pageLength = 50)) %>%
+        formatStyle("Capital", target = "row", backgroundColor = styleEqual(rv$correct_countries, rep("#f2f28f", times = length(rv$correct_countries))))
+    })
+    
+    output$game_summary_table <- renderTable({
+      rv$game_summary
+    })
+  })
   
   output$map <- renderLeaflet({
     m <- leaflet(my_spdf) %>%
